@@ -1,7 +1,7 @@
 //@version=6
-// v0.1.0 — proposed implementation; NOT TradingView-compiled or backtested.
+// v0.1.1 — diagnostic build; NOT TradingView-compiled or backtested.
 // Setup logic: confirmed M5 only. No partial exits. See README for limitations.
-strategy("Fibonacci v0.1 — PROVISIONAL execution", overlay=true, initial_capital=300, currency=currency.EUR, pyramiding=0, commission_type=strategy.commission.percent, commission_value=0.01, slippage=10, backtest_fill_limits_assumption=1, calc_on_every_tick=false, calc_on_order_fills=false, process_orders_on_close=false, use_bar_magnifier=true, margin_long=1, margin_short=1)
+strategy("Fibonacci v0.1.1 — DIAGNOSTIC / PROVISIONAL", overlay=true, initial_capital=300, currency=currency.EUR, pyramiding=0, commission_type=strategy.commission.percent, commission_value=0.01, slippage=10, backtest_fill_limits_assumption=1, calc_on_every_tick=false, calc_on_order_fills=false, process_orders_on_close=false, use_bar_magnifier=true, margin_long=1, margin_short=1)
 lots = input.float(0.01, "Broker lots", minval=0.01, step=0.01, group="Position")
 unitsPerLot = input.float(100.0, "Gold units per broker lot (VERIFY broker)", minval=0.001, group="Position")
 unitsPerTvQty = input.float(1.0, "Gold units per TradingView quantity (VERIFY feed)", minval=0.001, group="Position")
@@ -51,10 +51,13 @@ externalLookback = input.int(3, "Directional lookback (M5 bars)", minval=1, grou
 externalWindow = input.int(3, "Additional confirmation bars", minval=1, group="External filters")
 startDate = input.time(timestamp("01 Jan 2020 00:00 +0000"), "Entry start (UTC)", group="Test window")
 endDate = input.time(timestamp("01 Jan 2099 00:00 +0000"), "Entry end (UTC)", group="Test window")
+showDiagnostics = input.bool(true, "Show setup diagnostics", group="Diagnostics")
 
 if barstate.isfirst
     if timeframe.in_seconds() != 30 and timeframe.in_seconds() != 300
         runtime.error("Use a standard M5 chart for setups, or a 30-second chart for provisional finer execution.")
+    if startDate >= endDate
+        runtime.error("Entry start must be before entry end.")
     if zoneShallow >= zoneDeep
         runtime.error("Shallow retracement must be below deep retracement.")
 
@@ -90,6 +93,26 @@ var int activatedAt = na
 var int tradesInImpulse = 0
 var int m5Index = 0
 var int blockThroughM5 = 0
+// Diagnostic events are counted only within the selected entry-date window.
+// Counts are a pipeline, not mutually exclusive categories or performance metrics.
+var int diagBars = 0
+var int diagImpulses = 0
+var int diagSweeps = 0
+var int diagBases = 0
+var int diagBreakouts = 0
+var int diagSubmissions = 0
+var int diagFills = 0
+var int diagAnchorInvalid = 0
+var int diagSweepInvalid = 0
+var int diagBreakoutExpired = 0
+var int diagExternalExpired = 0
+var int diagOrderExpired = 0
+var int diagCappedPullback = 0
+var int diagSessionBlocked = 0
+var int diagTrendBlocked = 0
+var int diagExternalBlocked = 0
+var int diagFirstTime = na
+var int diagLastTime = na
 // 0=await sweep, 1=base, 2=breakout, 3=external confirmation, 4=entry pending.
 var int state = 0
 var float sweepExtreme = na
@@ -117,6 +140,7 @@ int signalClass = 0
 
 // Feedback belongs to the execution wrapper, not the setup detector.
 if executionFilled and state == 4
+    diagFills += time_close >= startDate and time_close < endDate ? 1 : 0
     tradesInImpulse += 1
     state := 0
 if entryAborted and state == 4
@@ -125,6 +149,13 @@ if entryAborted and state == 4
 
 if m5Close
     m5Index += 1
+    diagInWindow = mtc >= startDate and mtc < endDate
+    diagStep = diagInWindow ? 1 : 0
+    diagBars += diagStep
+    if diagInWindow
+        if na(diagFirstTime)
+            diagFirstTime := mt
+        diagLastTime := mtc
     // Update candidate impulses even while active anchors are locked.
     newFibObservation = fibTf == "5" or (not na(hclosed) and (na(seenHtf) or hclosed != seenHtf))
     fph = fibTf == "5" ? mph : hph
@@ -135,6 +166,7 @@ if m5Close
         if not na(fph) and na(fpl)
             if not na(lastFibLow) and lastFibLowTime < fpt and fph > lastFibLow
                 nextId += 1
+                diagImpulses += diagStep
                 latestOrigin := lastFibLow
                 latestEnd := fph
                 latestDirection := 1
@@ -144,6 +176,7 @@ if m5Close
         if not na(fpl) and na(fph)
             if not na(lastFibHigh) and lastFibHighTime < fpt and lastFibHigh > fpl
                 nextId += 1
+                diagImpulses += diagStep
                 latestOrigin := lastFibHigh
                 latestEnd := fpl
                 latestDirection := -1
@@ -160,6 +193,8 @@ if m5Close
     anchorBroken = direction != 0 and (direction == 1 ? ml < origin : mh > origin)
     sweepBroken = state != 0 and (direction == 1 ? ml < sweepExtreme : mh > sweepExtreme)
     if anchorBroken or sweepBroken
+        diagAnchorInvalid += anchorBroken ? diagStep : 0
+        diagSweepInvalid += sweepBroken ? diagStep : 0
         cancelEntry := state == 4
         state := 0
         blockedThisBar := true
@@ -168,6 +203,7 @@ if m5Close
             if latestId == impulseId
                 latestDirection := 0
     if state == 4 and m5Index - submittedAt >= orderBars
+        diagOrderExpired += diagStep
         state := 0
         cancelEntry := true
         blockedThisBar := true
@@ -212,6 +248,7 @@ if m5Close
                         array.push(usedPivots, key)
                         found := true
                 if found
+                    diagSweeps += diagStep
                     sweepExtreme := direction == 1 ? ml : mh
                     baseHigh := mh
                     baseLow := ml
@@ -221,23 +258,32 @@ if m5Close
             baseHigh := math.max(baseHigh, mh)
             baseLow := math.min(baseLow, ml)
             if m5Index - sweepAt + 1 >= baseCount
+                diagBases += diagStep
                 baseCompletedAt := m5Index
                 state := 2
         else if state == 2
             age = m5Index - baseCompletedAt
             broke = direction == 1 ? mc > baseHigh : mc < baseLow
             if age <= breakoutBars and broke
+                diagBreakouts += diagStep
                 breakoutAt := m5Index
                 state := 3
                 structureReady := true
             else if age >= breakoutBars
+                diagBreakoutExpired += diagStep
                 state := 0
         else if state == 3
             if m5Index - breakoutAt > externalWindow
+                diagExternalExpired += diagStep
                 state := 0
             else
                 // Delayed confirmations must still close on the breakout side.
                 structureReady := direction == 1 ? mc > baseHigh : mc < baseLow
+
+        if structureReady
+            diagSessionBlocked += not allowedSession ? diagStep : 0
+            diagTrendBlocked += not trendAllowed ? diagStep : 0
+            diagExternalBlocked += (not dxyOk or not silverOk) ? diagStep : 0
 
         if structureReady and allowedSession and trendAllowed and dxyOk and silverOk
             plannedStop = direction == 1 ? sweepExtreme - stopBuffer : sweepExtreme + stopBuffer
@@ -246,6 +292,8 @@ if m5Close
             // Round toward the permitted side of the risk cap.
             cap := direction == 1 ? math.floor(cap / syminfo.mintick) * syminfo.mintick : math.ceil(cap / syminfo.mintick) * syminfo.mintick
             if direction == 1 ? mc > plannedStop : mc < plannedStop
+                diagSubmissions += diagStep
+                diagCappedPullback += (direction == 1 ? cap < mc : cap > mc) ? diagStep : 0
                 buySignal := direction == 1
                 sellSignal := direction == -1
                 signalStop := plannedStop
@@ -290,6 +338,16 @@ plotshape(buySignal, "BUY candidate", shape.triangleup, location.belowbar, color
 plotshape(sellSignal, "SELL candidate", shape.triangledown, location.abovebar, color.red, size=size.small)
 plot(state, "Setup state (0 idle / 1 base / 2 breakout / 3 filters / 4 pending)", display=display.data_window)
 plot(impulseId, "Impulse ID", display=display.data_window)
+
+
+// This table reports setup events, NOT trades or profitability.
+var table diagnostics = table.new(position.bottom_right, 2, 19, border_width=1)
+if barstate.islast and showDiagnostics
+    labels = array.from("v0.1.1 diagnostic / state", "M5 bars in input date window", "First observed UTC", "Last observed UTC", "Confirmed impulses", "Qualifying sweeps", "Completed bases", "Structure breakouts", "Submitted candidates", "Observed fills (strategy only)", "Caps requiring pullback", "Anchor / sweep invalidations", "Breakout / external expiry", "Unfilled candidate expiry", "Session / date blocks", "EMA / external blocks", "Current impulse / trades", "Current stop / entry cap", "Rule changes")
+    values = array.from(str.tostring(state), str.tostring(diagBars), na(diagFirstTime) ? "none" : str.format_time(diagFirstTime, "yyyy-MM-dd HH:mm", "Etc/UTC"), na(diagLastTime) ? "none" : str.format_time(diagLastTime, "yyyy-MM-dd HH:mm", "Etc/UTC"), str.tostring(diagImpulses), str.tostring(diagSweeps), str.tostring(diagBases), str.tostring(diagBreakouts), str.tostring(diagSubmissions), str.tostring(diagFills), str.tostring(diagCappedPullback), str.tostring(diagAnchorInvalid) + " / " + str.tostring(diagSweepInvalid), str.tostring(diagBreakoutExpired) + " / " + str.tostring(diagExternalExpired), str.tostring(diagOrderExpired), str.tostring(diagSessionBlocked), str.tostring(diagTrendBlocked) + " / " + str.tostring(diagExternalBlocked), str.tostring(impulseId) + " / " + str.tostring(tradesInImpulse), str.tostring(submittedStop, format.mintick) + " / " + str.tostring(submittedLimit, format.mintick), "NONE; execution provisional")
+    for row = 0 to array.size(labels) - 1
+        table.cell(diagnostics, 0, row, array.get(labels, row), text_color=color.white, bgcolor=color.new(color.black, 15), text_size=size.small)
+        table.cell(diagnostics, 1, row, array.get(values, row), text_color=color.white, bgcolor=color.new(color.black, 15), text_size=size.small)
 
 // Cancel on each execution-bar close too, improving resolution on a 30s chart.
 if pending and not executionFilled and state == 4

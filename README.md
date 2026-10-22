@@ -30,3 +30,15 @@ Strategy Tester supplies standard performance data. Export trades for expectancy
 ## Status
 
 Local source consistency and focused risk/lifecycle checks are recorded in CHANGELOG.md. They are not Pine compilation or a TradingView backtest. Immediate BE validation, broker specification verification, actual historical/forward results and out-of-sample evaluation remain outstanding. No MQL5 EA has been implemented.
+
+## Investigating low trade frequency (v0.1.1)
+
+Load the diagnostic build with the SAME symbol, chart timeframe, history and inputs as the earlier run. Leave **Show setup diagnostics** enabled. Its bottom-right table reports the pipeline and actual observed history; it is not a performance table. Share the table, strategy Inputs/Properties, and List of trades for the same run. Use the strategy table (the indicator cannot observe fills).
+
+- Few sweeps versus impulses: investigate anchor choice, previously confirmed liquidity pivots and actual zone intersections on the chart.
+- Sweeps but few bases: inspect sweep-extreme invalidations.
+- Bases but few breakouts: inspect range width and six-bar expiry.
+- Breakouts but few submissions: inspect session/date, EMA and external filter blocks.
+- Submissions but few fills: inspect entry caps requiring pullbacks, one-bar expiry, invalidation, order size, margin and capital.
+
+These are diagnostic possibilities, not established causes or recommendations to loosen the frozen baseline. Counts apply to loaded input-window data, which can differ from the Strategy Tester displayed range. Events may cross date boundaries and categories can overlap; do not subtract rows as if they were mutually exclusive. No claim that the diagnostic release increases trades or improves performance.
