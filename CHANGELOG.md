@@ -1,5 +1,9 @@
 # Changelog
 
+## Uploaded log analysis — 2026-10-22 — no Pine changes
+
+Analyzed the user-supplied v0.2.1 Pine Logs CSV (1,078 rows). Confirmed ten submissions, nine capped limits never reached during their next M5 bar, and one near-entry exit with commission/slippage. Identified the three-candle breakout/sweep-stop/$6-cap/one-bar-expiry interaction as the supported fill bottleneck. Recorded source context, all order prices, base outcomes, BE sequencing limits and the pending single-factor experiment decision in docs/UPLOADED_LOG_DIAGNOSIS.md. No trading-rule change or improved performance is claimed.
+
 ## 0.2.1 — 2026-10-22 — execution logs without CSV export
 
 Added opt-in/configurable Pine Logs (enabled by default) to the v0.2 strategy and shared setup logs to its indicator. Events cover anchor activation/invalidation, qualifying sweeps, bases, breakouts, filters, planned risk/caps, submissions, observed fills, cancellation/expiry, provisional BE and closed trades. Detailed M5 mode includes bar/zone/pivot rejection data; independent log dates allow narrow traces without altering trade history. Added full-window summary/settings messages and stable execution impulse identity in logged trade details. v0.1 remains unchanged.

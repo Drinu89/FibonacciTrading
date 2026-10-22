@@ -30,3 +30,9 @@ A subsequent chart showed stepped automatic zones alongside a larger manually dr
 Displayed September 28–October 22, 2026, EUR 300 capital, net P&L −EUR 0.75 (−0.25%), maximum drawdown EUR 2.25 (0.75%), profitable trades 0/1, profit factor 0, and one Long closed trade in the breakdown. The user reports worse trade frequency. No v0.2 pipeline table, raw bars, exact input/property record or trade export is available. The agent did not run this backtest. The screenshot alone does not establish the reason for the loss or omitted trades.
 
 An additional source/pipeline audit is recorded in LOW_FREQUENCY_AUDIT.md. No trading rules were modified during that audit.
+
+## User-uploaded v0.2.1 Pine Logs CSV — analyzed 2026-10-22
+
+Analyzed 1,078 uploaded rows. Confirmed OANDA:XAUUSD, M5 chart and Fib timeframe, EUR 300, tick 0.001, point value 1, qty 1 mapped from 0.01 lot. Summary: 5,186 M5 bars, 331 impulses, 33 sweeps, 21 bases, 10 breakouts/submissions, one fill and nine unfilled expirations; nine entry caps required pullbacks. All nine expired caps were outside their next-bar high/low ranges. All ten filter checks passed. Risk at signal close ranged 5.401–17.770 Gold price dollars (median 12.4385), while maximum permitted distance was 6.00.
+
+The single trade entered 4160.755, reached the BE trigger, and exited 4160.745. Reported closed profit −EUR 0.7480818451 includes EUR 0.7391988451 commission. TP1/entry-return intrabar ordering was flagged uncertain. See UPLOADED_LOG_DIAGNOSIS.md for all ten orders and source hash. No agent-run TradingView backtest, new profitability result, or immediate-BE validation is claimed. Raw uploaded financial logs remain outside the Git checkout. No Pine rules were modified during analysis.
