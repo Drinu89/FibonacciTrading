@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.0 — 2026-10-22 — separate structure-anchor experiment
+
+Added Fibonacci_v0.2_Strategy.pine and Fibonacci_v0.2_Indicator.pine after user approval. New anchor candidates require a source-timeframe close beyond previously confirmed structure and a subsequently confirmed extreme pivot. Developing origins stay fixed; minor unbroken pivot pairs no longer create candidates. Added confirmed endpoint and source-structure Data Window fields. Preserved v0.1 Pine files and all inherited setup, order, risk and provisional BE rules.
+
+Validation: 12 local synthetic engine tests passed using a constrained translation of actual Pine source. Source checks verify shared indicator/strategy detectors and unchanged inherited trading logic. These do not compile Pine or test TradingView pivot merging/execution. TradingView compilation/replay/backtests remain unrun; no performance or trade-count improvement is claimed. See docs/V0_2_STRUCTURE_VARIANT.md.
+
 ## 0.1.1 — 2026-10-22 — low-frequency diagnostic build
 
 User reported almost no trades and supplied a Strategy Tester screenshot. Added an on-chart pipeline table to both scripts: observed M5 coverage, impulse/sweep/base/breakout counts, submitted candidates, strategy-observed fills, pullback caps, invalidations, expirations and filter blocks. Added an invalid entry-date-range error. No trading rules, default risk settings, costs, or entry permissiveness were changed.

@@ -42,3 +42,9 @@ Load the diagnostic build with the SAME symbol, chart timeframe, history and inp
 - Submissions but few fills: inspect entry caps requiring pullbacks, one-bar expiry, invalidation, order size, margin and capital.
 
 These are diagnostic possibilities, not established causes or recommendations to loosen the frozen baseline. Counts apply to loaded input-window data, which can differ from the Strategy Tester displayed range. Events may cross date boundaries and categories can overlap; do not subtract rows as if they were mutually exclusive. No claim that the diagnostic release increases trades or improves performance.
+
+## Separate structure-anchor experiment — v0.2.0
+
+The frozen v0.1 files remain unchanged. Use [Fibonacci_v0.2_Strategy.pine](Fibonacci_v0.2_Strategy.pine) and [Fibonacci_v0.2_Indicator.pine](Fibonacci_v0.2_Indicator.pine) as separate TradingView scripts. They require a confirmed source-timeframe close beyond prior swing structure before a subsequently confirmed endpoint can create a new Fibonacci. All entry, risk and exit rules remain inherited.
+
+Read [the exact variant rules](docs/V0_2_STRUCTURE_VARIANT.md). Compare on the SAME M5 chart, dates, costs and settings. Local anchor-engine tests and source-isolation checks pass; TradingView compilation and backtests remain pending. No increase in trade frequency or profit is claimed. Immediate BE remains provisional.

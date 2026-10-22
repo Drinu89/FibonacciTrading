@@ -33,5 +33,30 @@ assert 'mtc <= blockThroughM5' in strategy_setup
 assert 'array.push(usedPivots, key)' in strategy_setup
 assert 'array.clear(usedPivots)' in strategy_setup
 assert strategy_setup.index('if not na(lph)') > strategy_setup.index('if found')
-print('PASS: shared setup source matches; delimiters and execution/source safeguards checked.')
+# The structure variant must also share its detector exactly with its indicator.
+v2s = (root / 'Fibonacci_v0.2_Strategy.pine').read_text()
+v2i = (root / 'Fibonacci_v0.2_Indicator.pine').read_text()
+v2shared = v2s[v2s.index(start):v2s.index('// Cancel on each execution-bar close')].strip()
+assert v2shared == v2i[v2i.index(start):v2i.index('alertcondition(')].strip()
+assert '[a[1], b[1], d[1], eventTime[1], at[1], bt[1], pendingSide[1], buys[1], sells[1]]' in v2shared
+for source in (v2s, v2i):
+    tokens = re.sub(r'"(?:\\.|[^"\\])*"|//[^\n]*', '', source)
+    stack = []
+    for char in tokens:
+        if char in '([{':
+            stack.append(char)
+        elif char in ')]}':
+            assert stack and stack.pop() == {')': '(', ']': '[', '}': '{'}[char]
+    assert not stack
+# The execution wrapper, including costs, fills and provisional BE, is identical.
+marker = '// Cancel on each execution-bar close'
+assert strategy[strategy.index(marker):] == v2s[v2s.index(marker):]
+# Following candidate detection, preserve every existing setup/order rule.
+marker = '    // A queued impulse can become invalid'
+end = '// This table reports setup events'
+old_rules = strategy[strategy.index(marker):strategy.index(end)].strip()
+new_rules = v2s[v2s.index(marker):v2s.index('// Source counters include all loaded source history')].strip()
+new_rules = new_rules.replace('        selectedOriginTime := latestOriginTime\n', '').replace('        selectedEndpointTime := latestEndpointTime\n', '')
+assert old_rules == new_rules
+print('PASS: both indicator/strategy pairs match; inherited setup rules and execution wrapper are unchanged; delimiters and safeguards checked.')
 print('NOT CHECKED: Pine types/API compatibility, TradingView execution, history, or profitability.')

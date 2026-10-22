@@ -1,0 +1,515 @@
+//@version=6
+// v0.2.0 — diagnostic build; NOT TradingView-compiled or backtested.
+// Setup logic: confirmed M5 only. No partial exits. See README for limitations.
+strategy("Fibonacci v0.2 — STRUCTURE / PROVISIONAL", overlay=true, initial_capital=300, currency=currency.EUR, pyramiding=0, commission_type=strategy.commission.percent, commission_value=0.01, slippage=10, backtest_fill_limits_assumption=1, calc_on_every_tick=false, calc_on_order_fills=false, process_orders_on_close=false, use_bar_magnifier=true, margin_long=1, margin_short=1)
+lots = input.float(0.01, "Broker lots", minval=0.01, step=0.01, group="Position")
+unitsPerLot = input.float(100.0, "Gold units per broker lot (VERIFY broker)", minval=0.001, group="Position")
+unitsPerTvQty = input.float(1.0, "Gold units per TradingView quantity (VERIFY feed)", minval=0.001, group="Position")
+marginNote = input.bool(true, "Show execution warnings", group="Position")
+beDistance = input.float(6.0, "TP1 / BE trigger (price dollars)", minval=0.01, group="Exits")
+finalDistance = input.float(20.0, "Full exit distance (TP3 baseline; TP2 alternative 12)", minval=0.01, group="Exits")
+tp2Distance = input.float(12.0, "TP2 informational distance", minval=0.01, group="Exits")
+var bool pending = false
+var int priorClosed = 0
+var float activeStop = na
+var float activeTarget = na
+var float activeTrigger = na
+var bool beActive = false
+var int tradeClass = 0
+var int uncertainBars = 0
+var int capBreaches = 0
+var int prevFillBar = na
+closedNow = strategy.closedtrades > priorClosed
+bool executionFilled = pending and (strategy.position_size != 0 or closedNow)
+bool executionBusy = strategy.position_size != 0 or executionFilled
+bool entryAborted = false
+
+// All setup decisions occur at confirmed M5 closes, including on a 30-second chart.
+fibTf = input.timeframe("5", "Fibonacci timeframe", options=["5", "15", "60"], group="Swings")
+fibLeft = input.int(3, "Fib pivot left", minval=1, group="Swings")
+fibRight = input.int(3, "Fib pivot right", minval=1, group="Swings")
+liqLeft = input.int(3, "Liquidity pivot left", minval=1, group="Swings")
+liqRight = input.int(3, "Liquidity pivot right", minval=1, group="Swings")
+zoneShallow = input.float(61.8, "Shallow retracement %", minval=0, maxval=100, group="Setup") / 100
+zoneDeep = input.float(71.0, "Deep retracement %", minval=0, maxval=100, group="Setup") / 100
+tolerance = input.float(0.50, "Pivot proximity (Gold price dollars)", minval=0, group="Setup")
+baseCount = input.int(3, "Base candles INCLUDING sweep", minval=2, group="Setup")
+breakoutBars = input.int(6, "Breakout window (M5 bars)", minval=1, group="Setup")
+stopBuffer = input.float(0.30, "Sweep stop buffer (price dollars)", minval=0, group="Risk")
+maxRisk = input.float(6.0, "Maximum planned stop distance (price dollars)", minval=0.01, group="Risk")
+orderBars = input.int(1, "Unfilled entry lifetime (M5 bars)", minval=1, group="Risk")
+maxTrades = input.int(1, "Maximum executed trades per impulse", minval=1, group="Risk")
+trendMode = input.string("All Trades", "EMA 200 filter", options=["All Trades", "Trend-Following Only", "Countertrend Only"], group="Filters")
+useSession = input.bool(false, "Restrict entries to session", group="Filters")
+entrySession = input.session("0700-1700", "Entry session", group="Filters")
+sessionTimezone = input.string("Etc/UTC", "Session timezone", group="Filters")
+useDxy = input.bool(false, "Require DXY", group="External filters")
+useSilver = input.bool(false, "Require Silver", group="External filters")
+dxySymbol = input.symbol("TVC:DXY", "DXY symbol", group="External filters")
+silverSymbol = input.symbol("OANDA:XAGUSD", "Silver symbol", group="External filters")
+externalLookback = input.int(3, "Directional lookback (M5 bars)", minval=1, group="External filters")
+externalWindow = input.int(3, "Additional confirmation bars", minval=1, group="External filters")
+startDate = input.time(timestamp("01 Jan 2020 00:00 +0000"), "Entry start (UTC)", group="Test window")
+endDate = input.time(timestamp("01 Jan 2099 00:00 +0000"), "Entry end (UTC)", group="Test window")
+showDiagnostics = input.bool(true, "Show setup diagnostics", group="Diagnostics")
+
+if barstate.isfirst
+    if timeframe.in_seconds() != 30 and timeframe.in_seconds() != 300
+        runtime.error("Use a standard M5 chart for setups, or a 30-second chart for provisional finer execution.")
+    if startDate >= endDate
+        runtime.error("Entry start must be before entry end.")
+    if zoneShallow >= zoneDeep
+        runtime.error("Shallow retracement must be below deep retracement.")
+
+m5Packet() =>
+    [open, high, low, close, time, time_close, ta.pivothigh(high, liqLeft, liqRight), ta.pivotlow(low, liqLeft, liqRight), time[liqRight], ta.pivothigh(high, fibLeft, fibRight), ta.pivotlow(low, fibLeft, fibRight), time[fibRight], ta.ema(close, 200), not na(time("5", entrySession, sessionTimezone))]
+[mo, mh, ml, mc, mt, mtc, lph, lpl, lpt, mph, mpl, mpt, ema200, sessionAllowed] = request.security(syminfo.tickerid, "5", m5Packet(), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+// Current requested M5 data is used ONLY at its own closing timestamp.
+m5Close = barstate.isconfirmed and time_close == time_close("5") and time_close == mtc
+// BEGIN STRUCTURE ENGINE
+// Executed in the selected Fibonacci timeframe, never in chart seconds.
+structureEngine() =>
+    ph = ta.pivothigh(high, fibLeft, fibRight)
+    pl = ta.pivotlow(low, fibLeft, fibRight)
+    pivotTime = time[fibRight]
+    var float knownHigh = na
+    var float knownLow = na
+    var int knownHighTime = na
+    var int knownLowTime = na
+    var int brokenHighTime = na
+    var int brokenLowTime = na
+    var int developingSide = 0
+    var float developingOrigin = na
+    var int developingOriginTime = na
+    var float developingExtreme = na
+    var int breakTime = na
+    var float brokenLevel = na
+    var float confirmedOrigin = na
+    var float confirmedEndpoint = na
+    var int confirmedSide = 0
+    var int confirmationTime = na
+    var int confirmedOriginTime = na
+    var int confirmedEndpointTime = na
+    var int bullishBreaks = 0
+    var int bearishBreaks = 0
+
+    // Discard a developing leg if its fixed originating wick is breached.
+    if developingSide == 1 and low < developingOrigin
+        developingSide := 0
+    if developingSide == -1 and high > developingOrigin
+        developingSide := 0
+
+    // Only structure known BEFORE this candle can be broken by its close.
+    bullBreak = not na(knownHigh) and not na(knownLow) and knownHigh > knownLow and close > knownHigh and (na(brokenHighTime) or brokenHighTime != knownHighTime) and low >= knownLow
+    bearBreak = not na(knownHigh) and not na(knownLow) and knownHigh > knownLow and close < knownLow and (na(brokenLowTime) or brokenLowTime != knownLowTime) and high <= knownHigh
+    if bullBreak
+        brokenHighTime := knownHighTime
+        bullishBreaks += 1
+        // Additional same-direction breaks cannot move the developing origin.
+        if developingSide != 1
+            developingSide := 1
+            developingOrigin := knownLow
+            developingOriginTime := knownLowTime
+            developingExtreme := high
+            breakTime := time
+            brokenLevel := knownHigh
+    if bearBreak
+        brokenLowTime := knownLowTime
+        bearishBreaks += 1
+        if developingSide != -1
+            developingSide := -1
+            developingOrigin := knownHigh
+            developingOriginTime := knownHighTime
+            developingExtreme := low
+            breakTime := time
+            brokenLevel := knownLow
+
+    if developingSide == 1
+        developingExtreme := math.max(developingExtreme, high)
+    if developingSide == -1
+        developingExtreme := math.min(developingExtreme, low)
+
+    // Endpoint must be a confirmed pivot at/after the break and remain the
+    // most extreme wick reached since it. No retrospective trading signals.
+    if not na(ph) and na(pl)
+        if developingSide == 1 and pivotTime >= breakTime and pivotTime > developingOriginTime and ph == developingExtreme and ph > brokenLevel
+            confirmedOrigin := developingOrigin
+            confirmedEndpoint := ph
+            confirmedSide := 1
+            confirmationTime := time
+            confirmedOriginTime := developingOriginTime
+            confirmedEndpointTime := pivotTime
+            developingSide := 0
+        knownHigh := ph
+        knownHighTime := pivotTime
+    if not na(pl) and na(ph)
+        if developingSide == -1 and pivotTime >= breakTime and pivotTime > developingOriginTime and pl == developingExtreme and pl < brokenLevel
+            confirmedOrigin := developingOrigin
+            confirmedEndpoint := pl
+            confirmedSide := -1
+            confirmationTime := time
+            confirmedOriginTime := developingOriginTime
+            confirmedEndpointTime := pivotTime
+            developingSide := 0
+        knownLow := pl
+        knownLowTime := pivotTime
+    [confirmedOrigin, confirmedEndpoint, confirmedSide, confirmationTime, confirmedOriginTime, confirmedEndpointTime, developingSide, bullishBreaks, bearishBreaks]
+// END STRUCTURE ENGINE
+
+previousStructure() =>
+    [a, b, d, eventTime, at, bt, pendingSide, buys, sells] = structureEngine()
+    [a[1], b[1], d[1], eventTime[1], at[1], bt[1], pendingSide[1], buys[1], sells[1]]
+// Current M5 result is consumed exclusively on its final, confirmed close.
+[sa5, sb5, sd5, se5, sat5, sbt5, sp5, sbuys5, ssells5] = request.security(syminfo.tickerid, "5", structureEngine(), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+// Every HTF output is shifted one source bar; lookahead_on leaks no current bar.
+[sah, sbh, sdh, seh, sath, sbth, sph, sbuysh, ssellsh] = request.security(syminfo.tickerid, fibTf, previousStructure(), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+[dc, dp, dtc] = request.security(dxySymbol, "5", [close, close[externalLookback], time_close], gaps=barmerge.gaps_on, lookahead=barmerge.lookahead_off, ignore_invalid_symbol=true)
+[sc, sp, stc] = request.security(silverSymbol, "5", [close, close[externalLookback], time_close], gaps=barmerge.gaps_on, lookahead=barmerge.lookahead_off, ignore_invalid_symbol=true)
+
+var int seenStructureTime = na
+var int selectedOriginTime = na
+var int selectedEndpointTime = na
+var int latestOriginTime = na
+var int latestEndpointTime = na
+var float latestOrigin = na
+var float latestEnd = na
+var int latestDirection = 0
+var int latestId = 0
+var int nextId = 0
+var float origin = na
+var float endpoint = na
+var int direction = 0
+var int impulseId = 0
+var int activatedAt = na
+var int tradesInImpulse = 0
+var int m5Index = 0
+var int blockThroughM5 = 0
+// Diagnostic events are counted only within the selected entry-date window.
+// Counts are a pipeline, not mutually exclusive categories or performance metrics.
+var int diagBars = 0
+var int diagImpulses = 0
+var int diagSweeps = 0
+var int diagBases = 0
+var int diagBreakouts = 0
+var int diagSubmissions = 0
+var int diagFills = 0
+var int diagAnchorInvalid = 0
+var int diagSweepInvalid = 0
+var int diagBreakoutExpired = 0
+var int diagExternalExpired = 0
+var int diagOrderExpired = 0
+var int diagCappedPullback = 0
+var int diagSessionBlocked = 0
+var int diagTrendBlocked = 0
+var int diagExternalBlocked = 0
+var int diagFirstTime = na
+var int diagLastTime = na
+// 0=await sweep, 1=base, 2=breakout, 3=external confirmation, 4=entry pending.
+var int state = 0
+var float sweepExtreme = na
+var float baseHigh = na
+var float baseLow = na
+var int sweepAt = na
+var int breakoutAt = na
+var int submittedAt = na
+var int baseCompletedAt = na
+var float submittedStop = na
+var float submittedLimit = na
+var int submittedDirection = 0
+var int submittedClass = 0
+var array<float> highs = array.new_float()
+var array<int> highIds = array.new_int()
+var array<float> lows = array.new_float()
+var array<int> lowIds = array.new_int()
+var array<string> usedPivots = array.new_string()
+bool buySignal = false
+bool sellSignal = false
+bool cancelEntry = false
+float signalStop = na
+float signalLimit = na
+int signalClass = 0
+
+// Feedback belongs to the execution wrapper, not the setup detector.
+if executionFilled and state == 4
+    diagFills += time_close >= startDate and time_close < endDate ? 1 : 0
+    tradesInImpulse += 1
+    state := 0
+if entryAborted and state == 4
+    state := 0
+    cancelEntry := true
+
+if m5Close
+    m5Index += 1
+    diagInWindow = mtc >= startDate and mtc < endDate
+    diagStep = diagInWindow ? 1 : 0
+    diagBars += diagStep
+    if diagInWindow
+        if na(diagFirstTime)
+            diagFirstTime := mt
+        diagLastTime := mtc
+    // Only source-timeframe close-BOS legs can create new anchor candidates.
+    structureTime = fibTf == "5" ? se5 : seh
+    structureOrigin = fibTf == "5" ? sa5 : sah
+    structureEndpoint = fibTf == "5" ? sb5 : sbh
+    structureSide = fibTf == "5" ? sd5 : sdh
+    if not na(structureTime) and (na(seenStructureTime) or structureTime != seenStructureTime)
+        seenStructureTime := structureTime
+        nextId += 1
+        diagImpulses += diagStep
+        latestOriginTime := fibTf == "5" ? sat5 : sath
+        latestEndpointTime := fibTf == "5" ? sbt5 : sbth
+        latestOrigin := structureOrigin
+        latestEnd := structureEndpoint
+        latestDirection := structureSide
+        latestId := nextId
+
+    // A queued impulse can become invalid while another setup locks anchors.
+    if latestDirection != 0 and (latestDirection == 1 ? ml < latestOrigin : mh > latestOrigin)
+        latestDirection := 0
+
+    bool blockedThisBar = mtc <= blockThroughM5
+    // Strict breach; equality does not invalidate.
+    anchorBroken = direction != 0 and (direction == 1 ? ml < origin : mh > origin)
+    sweepBroken = state != 0 and (direction == 1 ? ml < sweepExtreme : mh > sweepExtreme)
+    if anchorBroken or sweepBroken
+        diagAnchorInvalid += anchorBroken ? diagStep : 0
+        diagSweepInvalid += sweepBroken ? diagStep : 0
+        cancelEntry := state == 4
+        state := 0
+        blockedThisBar := true
+        if anchorBroken
+            direction := 0
+            if latestId == impulseId
+                latestDirection := 0
+    if state == 4 and m5Index - submittedAt >= orderBars
+        diagOrderExpired += diagStep
+        state := 0
+        cancelEntry := true
+        blockedThisBar := true
+
+    // Adopt the newest candidate only outside locked setup states.
+    if state == 0 and not blockedThisBar and latestId != impulseId and latestDirection != 0
+        selectedOriginTime := latestOriginTime
+        selectedEndpointTime := latestEndpointTime
+        origin := latestOrigin
+        endpoint := latestEnd
+        direction := latestDirection
+        impulseId := latestId
+        activatedAt := m5Index
+        tradesInImpulse := 0
+        array.clear(usedPivots)
+        if direction == 1 ? ml < origin : mh > origin
+            direction := 0
+            latestDirection := 0
+
+    shallow = endpoint + (origin - endpoint) * zoneShallow
+    deep = endpoint + (origin - endpoint) * zoneDeep
+    zLow = math.min(shallow, deep)
+    zHigh = math.max(shallow, deep)
+    allowedSession = (not useSession or sessionAllowed) and mtc >= startDate and mtc < endDate
+    trendClass = direction == 1 ? (mc > ema200 ? 1 : mc < ema200 ? -1 : 0) : (mc < ema200 ? 1 : mc > ema200 ? -1 : 0)
+    trendAllowed = not na(ema200) and (trendMode == "All Trades" or (trendMode == "Trend-Following Only" and trendClass == 1) or (trendMode == "Countertrend Only" and trendClass == -1))
+    dxyOk = not useDxy or (not na(dc) and not na(dp) and dtc == mtc and (direction == 1 ? dc < dp : dc > dp))
+    silverOk = not useSilver or (not na(sc) and not na(sp) and stc == mtc and (direction == 1 ? sc > sp : sc < sp))
+    bool structureReady = false
+
+    if not blockedThisBar and direction != 0 and not executionBusy
+        if state == 0 and tradesInImpulse < maxTrades and m5Index > activatedAt
+            levels = direction == 1 ? lows : highs
+            ids = direction == 1 ? lowIds : highIds
+            if array.size(levels) > 0
+                // Most recent first. Consume ALL eligible pivots swept by this candle.
+                bool found = false
+                for i = 0 to array.size(levels) - 1
+                    level = array.get(levels, i)
+                    key = str.tostring(direction) + ":" + str.tostring(array.get(ids, i))
+                    nearZone = level >= zLow - tolerance and level <= zHigh + tolerance
+                    reclaimed = direction == 1 ? ml < level and mc > level : mh > level and mc < level
+                    if nearZone and mh >= zLow and ml <= zHigh and reclaimed and not array.includes(usedPivots, key)
+                        array.push(usedPivots, key)
+                        found := true
+                if found
+                    diagSweeps += diagStep
+                    sweepExtreme := direction == 1 ? ml : mh
+                    baseHigh := mh
+                    baseLow := ml
+                    sweepAt := m5Index
+                    state := 1
+        else if state == 1
+            baseHigh := math.max(baseHigh, mh)
+            baseLow := math.min(baseLow, ml)
+            if m5Index - sweepAt + 1 >= baseCount
+                diagBases += diagStep
+                baseCompletedAt := m5Index
+                state := 2
+        else if state == 2
+            age = m5Index - baseCompletedAt
+            broke = direction == 1 ? mc > baseHigh : mc < baseLow
+            if age <= breakoutBars and broke
+                diagBreakouts += diagStep
+                breakoutAt := m5Index
+                state := 3
+                structureReady := true
+            else if age >= breakoutBars
+                diagBreakoutExpired += diagStep
+                state := 0
+        else if state == 3
+            if m5Index - breakoutAt > externalWindow
+                diagExternalExpired += diagStep
+                state := 0
+            else
+                // Delayed confirmations must still close on the breakout side.
+                structureReady := direction == 1 ? mc > baseHigh : mc < baseLow
+
+        if structureReady
+            diagSessionBlocked += not allowedSession ? diagStep : 0
+            diagTrendBlocked += not trendAllowed ? diagStep : 0
+            diagExternalBlocked += (not dxyOk or not silverOk) ? diagStep : 0
+
+        if structureReady and allowedSession and trendAllowed and dxyOk and silverOk
+            plannedStop = direction == 1 ? sweepExtreme - stopBuffer : sweepExtreme + stopBuffer
+            plannedStop := direction == 1 ? math.floor(plannedStop / syminfo.mintick) * syminfo.mintick : math.ceil(plannedStop / syminfo.mintick) * syminfo.mintick
+            cap = direction == 1 ? plannedStop + maxRisk : plannedStop - maxRisk
+            // Round toward the permitted side of the risk cap.
+            cap := direction == 1 ? math.floor(cap / syminfo.mintick) * syminfo.mintick : math.ceil(cap / syminfo.mintick) * syminfo.mintick
+            if direction == 1 ? mc > plannedStop : mc < plannedStop
+                diagSubmissions += diagStep
+                diagCappedPullback += (direction == 1 ? cap < mc : cap > mc) ? diagStep : 0
+                buySignal := direction == 1
+                sellSignal := direction == -1
+                signalStop := plannedStop
+                signalLimit := cap
+                signalClass := trendClass
+                submittedStop := plannedStop
+                submittedLimit := cap
+                submittedDirection := direction
+                submittedClass := trendClass
+                submittedAt := m5Index
+                state := 4
+
+    // Without external filters there is no delayed-confirmation entry.
+    if state == 3 and not useDxy and not useSilver
+        state := 0
+
+    // Only AFTER sweep evaluation: newly confirmed pivots cannot be swept on
+    // their own confirmation candle. Keep only the two most recent per side.
+    if not na(lph)
+        array.unshift(highs, lph)
+        array.unshift(highIds, lpt)
+        if array.size(highs) > 2
+            array.pop(highs)
+            array.pop(highIds)
+    if not na(lpl)
+        array.unshift(lows, lpl)
+        array.unshift(lowIds, lpt)
+        if array.size(lows) > 2
+            array.pop(lows)
+            array.pop(lowIds)
+
+z1 = endpoint + (origin - endpoint) * zoneShallow
+z2 = endpoint + (origin - endpoint) * zoneDeep
+p1 = plot(direction != 0 ? z1 : na, "61.8 / shallow", color=color.orange, style=plot.style_linebr)
+p2 = plot(direction != 0 ? z2 : na, "71 / deep", color=color.orange, style=plot.style_linebr)
+fill(p1, p2, color=color.new(color.orange, 88), title="Entry zone")
+plot(direction != 0 ? origin : na, "Origin", color=color.gray, style=plot.style_linebr)
+plot(ema200, "M5 EMA 200", color=color.blue)
+plot(state >= 2 ? baseHigh : na, "Frozen base high", color=color.new(color.green, 30), style=plot.style_linebr)
+plot(state >= 2 ? baseLow : na, "Frozen base low", color=color.new(color.red, 30), style=plot.style_linebr)
+plotshape(buySignal, "BUY candidate", shape.triangleup, location.belowbar, color.lime, size=size.small)
+plotshape(sellSignal, "SELL candidate", shape.triangledown, location.abovebar, color.red, size=size.small)
+plot(state, "Setup state (0 idle / 1 base / 2 breakout / 3 filters / 4 pending)", display=display.data_window)
+plot(impulseId, "Impulse ID", display=display.data_window)
+
+
+// Source counters include all loaded source history; they are not window counts.
+plot(fibTf == "5" ? sbuys5 : sbuysh, "Source bullish BOS (all loaded history)", display=display.data_window)
+plot(fibTf == "5" ? ssells5 : ssellsh, "Source bearish BOS (all loaded history)", display=display.data_window)
+plot(fibTf == "5" ? sp5 : sph, "Developing source direction", display=display.data_window)
+plot(direction != 0 ? endpoint : na, "Confirmed impulse endpoint", color=color.new(color.blue, 40), style=plot.style_linebr)
+plot(selectedOriginTime, "Selected origin timestamp", display=display.data_window)
+plot(selectedEndpointTime, "Selected endpoint timestamp", display=display.data_window)
+
+// This table reports setup events, NOT trades or profitability.
+var table diagnostics = table.new(position.bottom_right, 2, 19, border_width=1)
+if barstate.islast and showDiagnostics
+    labels = array.from("v0.2 STRUCTURE / state", "M5 bars in input date window", "First observed UTC", "Last observed UTC", "Confirmed impulses", "Qualifying sweeps", "Completed bases", "Structure breakouts", "Submitted candidates", "Observed fills (strategy only)", "Caps requiring pullback", "Anchor / sweep invalidations", "Breakout / external expiry", "Unfilled candidate expiry", "Session / date blocks", "EMA / external blocks", "Current impulse / trades", "Current stop / entry cap", "Variant")
+    values = array.from(str.tostring(state), str.tostring(diagBars), na(diagFirstTime) ? "none" : str.format_time(diagFirstTime, "yyyy-MM-dd HH:mm", "Etc/UTC"), na(diagLastTime) ? "none" : str.format_time(diagLastTime, "yyyy-MM-dd HH:mm", "Etc/UTC"), str.tostring(diagImpulses), str.tostring(diagSweeps), str.tostring(diagBases), str.tostring(diagBreakouts), str.tostring(diagSubmissions), str.tostring(diagFills), str.tostring(diagCappedPullback), str.tostring(diagAnchorInvalid) + " / " + str.tostring(diagSweepInvalid), str.tostring(diagBreakoutExpired) + " / " + str.tostring(diagExternalExpired), str.tostring(diagOrderExpired), str.tostring(diagSessionBlocked), str.tostring(diagTrendBlocked) + " / " + str.tostring(diagExternalBlocked), str.tostring(impulseId) + " / " + str.tostring(tradesInImpulse), str.tostring(submittedStop, format.mintick) + " / " + str.tostring(submittedLimit, format.mintick), "Close-BOS anchors only; BE provisional")
+    for row = 0 to array.size(labels) - 1
+        table.cell(diagnostics, 0, row, array.get(labels, row), text_color=color.white, bgcolor=color.new(color.black, 15), text_size=size.small)
+        table.cell(diagnostics, 1, row, array.get(values, row), text_color=color.white, bgcolor=color.new(color.black, 15), text_size=size.small)
+
+// Cancel on each execution-bar close too, improving resolution on a 30s chart.
+if pending and not executionFilled and state == 4
+    invalidPending = (submittedDirection == 1 ? low < sweepExtreme or low < origin : high > sweepExtreme or high > origin) or time_close >= endDate
+    if invalidPending
+        strategy.cancel("Long")
+        strategy.cancel("Short")
+        state := 0
+        blockThroughM5 := time_close("5")
+        pending := false
+if cancelEntry and not executionFilled
+    strategy.cancel("Long")
+    strategy.cancel("Short")
+    pending := false
+
+if executionFilled
+    pending := false
+    tradeClass := submittedClass
+    beActive := false
+    activeStop := submittedStop
+    if strategy.position_size != 0
+        fillPrice = strategy.position_avg_price
+        side = strategy.position_size > 0 ? 1 : -1
+        activeTarget := fillPrice + side * finalDistance
+        activeTrigger := fillPrice + side * beDistance
+        prevFillBar := strategy.opentrades.entry_bar_index(0)
+        if side * (fillPrice - activeStop) > maxRisk + syminfo.mintick or side * (fillPrice - activeStop) <= 0
+            capBreaches += 1
+
+if buySignal or sellSignal
+    qty = lots * unitsPerLot / unitsPerTvQty
+    finalTicks = math.max(1, int(math.round(finalDistance / syminfo.mintick)))
+    pending := true
+    if buySignal
+        strategy.entry("Long", strategy.long, qty=qty, limit=signalLimit)
+        // Relative profit target is attached before fill: no unprotected target gap.
+        strategy.exit("Long bracket", "Long", stop=signalStop, profit=finalTicks)
+    else
+        strategy.entry("Short", strategy.short, qty=qty, limit=signalLimit)
+        strategy.exit("Short bracket", "Short", stop=signalStop, profit=finalTicks)
+
+if strategy.position_size != 0
+    side = strategy.position_size > 0 ? 1 : -1
+    reachedTrigger = side == 1 ? high >= activeTrigger : low <= activeTrigger
+    returnedToEntry = side == 1 ? low <= strategy.position_avg_price : high >= strategy.position_avg_price
+    if not beActive and reachedTrigger
+        // PROVISIONAL: observed execution-bar touch, NOT a TP1 order fill.
+        // This update becomes executable AFTER this 30s/M5 bar closes.
+        // Never retroactively grant a BE exit earlier within this bar.
+        if returnedToEntry or bar_index == prevFillBar
+            uncertainBars += 1
+        // Fill-bar extrema may predate the entry. Do not use them to arm BE.
+        if bar_index != prevFillBar
+            beActive := true
+            activeStop := strategy.position_avg_price
+    if side == 1
+        strategy.exit("Long bracket", "Long", stop=activeStop, limit=activeTarget)
+    else
+        strategy.exit("Short bracket", "Short", stop=activeStop, limit=activeTarget)
+
+if closedNow and strategy.position_size == 0
+    activeStop := na
+    activeTarget := na
+    activeTrigger := na
+    beActive := false
+priorClosed := strategy.closedtrades
+plot(strategy.position_size != 0 ? activeStop : na, "Live stop", color=color.red, style=plot.style_linebr)
+plot(strategy.position_size != 0 ? activeTarget : na, "Full exit", color=color.green, style=plot.style_linebr)
+plot(strategy.position_size != 0 ? activeTrigger : na, "TP1 BE trigger (NO partial exit)", color=color.aqua, style=plot.style_linebr)
+plot(strategy.position_size != 0 ? strategy.position_avg_price + math.sign(strategy.position_size) * tp2Distance : na, "TP2 informational", color=color.new(color.green, 60), style=plot.style_linebr)
+plot(tradeClass, "Stored trade class (+1 trend / -1 counter / 0 neutral)", display=display.data_window)
+plot(uncertainBars, "BE sequencing warnings (not exhaustive)", display=display.data_window)
+plot(capBreaches, "Observed fill risk-cap exceptions", display=display.data_window)
+var table warning = table.new(position.top_right, 1, 1)
+if barstate.islast and marginNote
+    table.cell(warning, 0, 0, "PROVISIONAL — NOT VALIDATED\nM5 signals; BE at execution-bar close\nUse 30S chart for finer approximation\nSet broker margin & quantity in Properties\nBE warnings: " + str.tostring(uncertainBars), text_color=color.white, bgcolor=color.new(color.red, 25))

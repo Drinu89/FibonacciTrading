@@ -9,3 +9,5 @@
 - Record instrument/feed, timezone, dates, inputs, costs, order settings, and code version for every result. Retain chronological out-of-sample data; never optimize against the final holdout.
 - Evaluate profit factor, drawdown, net profit, trade count, win rate, expectancy, monthly returns, and maximum consecutive losing trades. Include cost sensitivity, parameter stability, and different market regimes; never select solely by net profit.
 - Use the existing isolated checkout; do not create worktrees unless requested. Preserve user changes and never embed credentials.
+
+- The user approved a separate v0.2 structure-anchor experiment: follow docs/V0_2_STRUCTURE_VARIANT.md. Preserve frozen v0.1 Pine files. Compare identical entry/risk/exit settings; do not claim additional trades or performance before supplied results.

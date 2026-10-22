@@ -1,0 +1,3 @@
+# Local Python verification outputs
+__pycache__/
+*.py[cod]
