@@ -1,6 +1,7 @@
 """Local source checks only. This is NOT a Pine compiler or backtest."""
 from pathlib import Path
 import re
+from pine_source import without_trace
 
 root = Path(__file__).resolve().parents[1]
 strategy = (root / 'Fibonacci_v0.1_Strategy.pine').read_text()
@@ -50,12 +51,12 @@ for source in (v2s, v2i):
     assert not stack
 # The execution wrapper, including costs, fills and provisional BE, is identical.
 marker = '// Cancel on each execution-bar close'
-assert strategy[strategy.index(marker):] == v2s[v2s.index(marker):]
+assert strategy[strategy.index(marker):].strip() == without_trace(v2s[v2s.index(marker):]).strip()
 # Following candidate detection, preserve every existing setup/order rule.
 marker = '    // A queued impulse can become invalid'
 end = '// This table reports setup events'
 old_rules = strategy[strategy.index(marker):strategy.index(end)].strip()
-new_rules = v2s[v2s.index(marker):v2s.index('// Source counters include all loaded source history')].strip()
+new_rules = without_trace(v2s[v2s.index(marker):v2s.index('// Source counters include all loaded source history')]).strip()
 new_rules = new_rules.replace('        selectedOriginTime := latestOriginTime\n', '').replace('        selectedEndpointTime := latestEndpointTime\n', '')
 assert old_rules == new_rules
 print('PASS: both indicator/strategy pairs match; inherited setup rules and execution wrapper are unchanged; delimiters and safeguards checked.')

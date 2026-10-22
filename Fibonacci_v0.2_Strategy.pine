@@ -1,7 +1,7 @@
 //@version=6
-// v0.2.0 — diagnostic build; NOT TradingView-compiled or backtested.
+// v0.2.1 — execution logs; NOT TradingView-compiled or backtested.
 // Setup logic: confirmed M5 only. No partial exits. See README for limitations.
-strategy("Fibonacci v0.2 — STRUCTURE / PROVISIONAL", overlay=true, initial_capital=300, currency=currency.EUR, pyramiding=0, commission_type=strategy.commission.percent, commission_value=0.01, slippage=10, backtest_fill_limits_assumption=1, calc_on_every_tick=false, calc_on_order_fills=false, process_orders_on_close=false, use_bar_magnifier=true, margin_long=1, margin_short=1)
+strategy("Fibonacci v0.2.1 — STRUCTURE / LOGS", overlay=true, initial_capital=300, currency=currency.EUR, pyramiding=0, commission_type=strategy.commission.percent, commission_value=0.01, slippage=10, backtest_fill_limits_assumption=1, calc_on_every_tick=false, calc_on_order_fills=false, process_orders_on_close=false, use_bar_magnifier=true, margin_long=1, margin_short=1)
 lots = input.float(0.01, "Broker lots", minval=0.01, step=0.01, group="Position")
 unitsPerLot = input.float(100.0, "Gold units per broker lot (VERIFY broker)", minval=0.001, group="Position")
 unitsPerTvQty = input.float(1.0, "Gold units per TradingView quantity (VERIFY feed)", minval=0.001, group="Position")
@@ -23,6 +23,11 @@ closedNow = strategy.closedtrades > priorClosed
 bool executionFilled = pending and (strategy.position_size != 0 or closedNow)
 bool executionBusy = strategy.position_size != 0 or executionFilled
 bool entryAborted = false
+
+// TRACE-BEGIN
+var int tracePendingImpulse = na
+var int tracePositionImpulse = na
+// TRACE-END
 
 // All setup decisions occur at confirmed M5 closes, including on a 30-second chart.
 fibTf = input.timeframe("5", "Fibonacci timeframe", options=["5", "15", "60"], group="Swings")
@@ -52,6 +57,12 @@ externalWindow = input.int(3, "Additional confirmation bars", minval=1, group="E
 startDate = input.time(timestamp("01 Jan 2020 00:00 +0000"), "Entry start (UTC)", group="Test window")
 endDate = input.time(timestamp("01 Jan 2099 00:00 +0000"), "Entry end (UTC)", group="Test window")
 showDiagnostics = input.bool(true, "Show setup diagnostics", group="Diagnostics")
+// TRACE-BEGIN
+enableTrace = input.bool(true, "Enable Pine Logs", group="Execution logs")
+traceMode = input.string("Events", "Log detail", options=["Events", "Detailed M5"], group="Execution logs")
+traceStart = input.time(timestamp("01 Jan 2020 00:00 +0000"), "Log start (UTC; independent of entry dates)", group="Execution logs")
+traceEnd = input.time(timestamp("01 Jan 2099 00:00 +0000"), "Log end (UTC; exclusive)", group="Execution logs")
+// TRACE-END
 
 if barstate.isfirst
     if timeframe.in_seconds() != 30 and timeframe.in_seconds() != 300
@@ -229,8 +240,18 @@ float signalStop = na
 float signalLimit = na
 int signalClass = 0
 
+// TRACE-BEGIN
+// Read-only observer. The log window gates messages, never trades.
+traceLog(string eventName, string detail, bool detailedOnly = false) =>
+    if enableTrace and barstate.isconfirmed and time_close >= traceStart and time_close < traceEnd and (not detailedOnly or traceMode == "Detailed M5")
+        log.info("UTC={0} | {1} | impulse={2} state={3} side={4} | {5}", str.format_time(time_close, "yyyy-MM-dd HH:mm:ss", "Etc/UTC"), eventName, str.tostring(impulseId), str.tostring(state), str.tostring(direction), detail)
+    0
+// TRACE-END
 // Feedback belongs to the execution wrapper, not the setup detector.
 if executionFilled and state == 4
+    // TRACE-BEGIN
+    traceLog("IMPULSE_CONSUMED", "Executed entry observed; count=" + str.tostring(tradesInImpulse + 1) + "/" + str.tostring(maxTrades))
+    // TRACE-END
     diagFills += time_close >= startDate and time_close < endDate ? 1 : 0
     tradesInImpulse += 1
     state := 0
@@ -262,9 +283,15 @@ if m5Close
         latestEnd := structureEndpoint
         latestDirection := structureSide
         latestId := nextId
+        // TRACE-BEGIN
+        traceLog("ANCHOR_CANDIDATE", "new_id=" + str.tostring(latestId) + " side=" + str.tostring(latestDirection) + " A=" + str.tostring(latestOrigin, format.mintick) + " B=" + str.tostring(latestEnd, format.mintick) + " A_time=" + str.format_time(latestOriginTime, "yyyy-MM-dd HH:mm", "Etc/UTC") + " B_time=" + str.format_time(latestEndpointTime, "yyyy-MM-dd HH:mm", "Etc/UTC") + " locked=" + str.tostring(state != 0))
+        // TRACE-END
 
     // A queued impulse can become invalid while another setup locks anchors.
     if latestDirection != 0 and (latestDirection == 1 ? ml < latestOrigin : mh > latestOrigin)
+        // TRACE-BEGIN
+        traceLog("CANDIDATE_INVALIDATED", "newest_id=" + str.tostring(latestId) + " origin=" + str.tostring(latestOrigin, format.mintick) + " M5_low=" + str.tostring(ml, format.mintick) + " M5_high=" + str.tostring(mh, format.mintick))
+        // TRACE-END
         latestDirection := 0
 
     bool blockedThisBar = mtc <= blockThroughM5
@@ -272,6 +299,9 @@ if m5Close
     anchorBroken = direction != 0 and (direction == 1 ? ml < origin : mh > origin)
     sweepBroken = state != 0 and (direction == 1 ? ml < sweepExtreme : mh > sweepExtreme)
     if anchorBroken or sweepBroken
+        // TRACE-BEGIN
+        traceLog("SETUP_INVALIDATED", "anchor_broken=" + str.tostring(anchorBroken) + " sweep_broken=" + str.tostring(sweepBroken) + " origin=" + str.tostring(origin, format.mintick) + " sweep=" + str.tostring(sweepExtreme, format.mintick) + " low=" + str.tostring(ml, format.mintick) + " high=" + str.tostring(mh, format.mintick))
+        // TRACE-END
         diagAnchorInvalid += anchorBroken ? diagStep : 0
         diagSweepInvalid += sweepBroken ? diagStep : 0
         cancelEntry := state == 4
@@ -282,6 +312,9 @@ if m5Close
             if latestId == impulseId
                 latestDirection := 0
     if state == 4 and m5Index - submittedAt >= orderBars
+        // TRACE-BEGIN
+        traceLog("ORDER_EXPIRED", "unfilled_age_M5=" + str.tostring(m5Index - submittedAt) + " cap=" + str.tostring(submittedLimit, format.mintick) + " SL=" + str.tostring(submittedStop, format.mintick) + " interval_low=" + str.tostring(ml, format.mintick) + " interval_high=" + str.tostring(mh, format.mintick) + "; fill absence may also reflect emulator verification, margin or quantity")
+        // TRACE-END
         diagOrderExpired += diagStep
         state := 0
         cancelEntry := true
@@ -289,6 +322,9 @@ if m5Close
 
     // Adopt the newest candidate only outside locked setup states.
     if state == 0 and not blockedThisBar and latestId != impulseId and latestDirection != 0
+        // TRACE-BEGIN
+        traceLog("ANCHOR_ADOPT", "old_id=" + str.tostring(impulseId) + " new_id=" + str.tostring(latestId) + " side=" + str.tostring(latestDirection) + " A=" + str.tostring(latestOrigin, format.mintick) + " B=" + str.tostring(latestEnd, format.mintick))
+        // TRACE-END
         selectedOriginTime := latestOriginTime
         selectedEndpointTime := latestEndpointTime
         origin := latestOrigin
@@ -312,11 +348,18 @@ if m5Close
     dxyOk = not useDxy or (not na(dc) and not na(dp) and dtc == mtc and (direction == 1 ? dc < dp : dc > dp))
     silverOk = not useSilver or (not na(sc) and not na(sp) and stc == mtc and (direction == 1 ? sc > sp : sc < sp))
     bool structureReady = false
+    // TRACE-BEGIN
+    traceLog("M5_BAR", "O=" + str.tostring(mo, format.mintick) + " H=" + str.tostring(mh, format.mintick) + " L=" + str.tostring(ml, format.mintick) + " C=" + str.tostring(mc, format.mintick) + " A=" + str.tostring(origin, format.mintick) + " B=" + str.tostring(endpoint, format.mintick) + " zone=" + str.tostring(zLow, format.mintick) + ".." + str.tostring(zHigh, format.mintick) + " occupied=" + str.tostring(executionBusy) + " blocked=" + str.tostring(blockedThisBar) + " consumed=" + str.tostring(tradesInImpulse >= maxTrades) + " activation_bar=" + str.tostring(m5Index == activatedAt) + " source_pending=" + str.tostring(fibTf == "5" ? sp5 : sph) + " gate=" + (direction == 0 ? "NO_ACTIVE_IMPULSE" : executionBusy ? "POSITION_OR_FILL" : blockedThisBar ? "INVALIDATED_OR_EXPIRED_THIS_BAR" : tradesInImpulse >= maxTrades ? "IMPULSE_CONSUMED" : m5Index == activatedAt ? "ACTIVATION_BAR" : "STATE_MACHINE"), true)
+    // TRACE-END
 
     if not blockedThisBar and direction != 0 and not executionBusy
         if state == 0 and tradesInImpulse < maxTrades and m5Index > activatedAt
             levels = direction == 1 ? lows : highs
             ids = direction == 1 ? lowIds : highIds
+            // TRACE-BEGIN
+            if mh >= zLow and ml <= zHigh
+                traceLog("ZONE_VISIT", "eligible-direction pivot_count=" + str.tostring(array.size(levels)) + "; next messages explain each of last two pivots", true)
+            // TRACE-END
             if array.size(levels) > 0
                 // Most recent first. Consume ALL eligible pivots swept by this candle.
                 bool found = false
@@ -325,8 +368,15 @@ if m5Close
                     key = str.tostring(direction) + ":" + str.tostring(array.get(ids, i))
                     nearZone = level >= zLow - tolerance and level <= zHigh + tolerance
                     reclaimed = direction == 1 ? ml < level and mc > level : mh > level and mc < level
+                    // TRACE-BEGIN
+                    if mh >= zLow and ml <= zHigh
+                        traceLog("PIVOT_CHECK", "key=" + key + " level=" + str.tostring(level, format.mintick) + " near_zone=" + str.tostring(nearZone) + " swept_and_reclaimed=" + str.tostring(reclaimed) + " already_used=" + str.tostring(array.includes(usedPivots, key)) + " close=" + str.tostring(mc, format.mintick), true)
+                    // TRACE-END
                     if nearZone and mh >= zLow and ml <= zHigh and reclaimed and not array.includes(usedPivots, key)
                         array.push(usedPivots, key)
+                        // TRACE-BEGIN
+                        traceLog("SWEEP_PIVOT", "key=" + key + " pivot=" + str.tostring(level, format.mintick) + " reclaim_close=" + str.tostring(mc, format.mintick))
+                        // TRACE-END
                         found := true
                 if found
                     diagSweeps += diagStep
@@ -335,33 +385,57 @@ if m5Close
                     baseLow := ml
                     sweepAt := m5Index
                     state := 1
+                    // TRACE-BEGIN
+                    traceLog("SWEEP_STARTED", "candle=1/" + str.tostring(baseCount) + " extreme=" + str.tostring(sweepExtreme, format.mintick) + " base_low=" + str.tostring(baseLow, format.mintick) + " base_high=" + str.tostring(baseHigh, format.mintick))
+                    // TRACE-END
         else if state == 1
             baseHigh := math.max(baseHigh, mh)
             baseLow := math.min(baseLow, ml)
+            // TRACE-BEGIN
+            traceLog("BASE_PROGRESS", "candle=" + str.tostring(m5Index - sweepAt + 1) + "/" + str.tostring(baseCount) + " low=" + str.tostring(baseLow, format.mintick) + " high=" + str.tostring(baseHigh, format.mintick))
+            // TRACE-END
             if m5Index - sweepAt + 1 >= baseCount
                 diagBases += diagStep
                 baseCompletedAt := m5Index
                 state := 2
+                // TRACE-BEGIN
+                traceLog("BASE_FROZEN", "low=" + str.tostring(baseLow, format.mintick) + " high=" + str.tostring(baseHigh, format.mintick) + " breakout_window=" + str.tostring(breakoutBars))
+                // TRACE-END
         else if state == 2
             age = m5Index - baseCompletedAt
             broke = direction == 1 ? mc > baseHigh : mc < baseLow
+            // TRACE-BEGIN
+            traceLog("BREAKOUT_CHECK", "age=" + str.tostring(age) + "/" + str.tostring(breakoutBars) + " close=" + str.tostring(mc, format.mintick) + " boundary=" + str.tostring(direction == 1 ? baseHigh : baseLow, format.mintick) + " broke=" + str.tostring(broke), true)
+            // TRACE-END
             if age <= breakoutBars and broke
                 diagBreakouts += diagStep
+                // TRACE-BEGIN
+                traceLog("BREAKOUT_CONFIRMED", "age=" + str.tostring(age) + " close=" + str.tostring(mc, format.mintick) + " base_low=" + str.tostring(baseLow, format.mintick) + " base_high=" + str.tostring(baseHigh, format.mintick))
+                // TRACE-END
                 breakoutAt := m5Index
                 state := 3
                 structureReady := true
             else if age >= breakoutBars
                 diagBreakoutExpired += diagStep
+                // TRACE-BEGIN
+                traceLog("BREAKOUT_EXPIRED", "age=" + str.tostring(age) + " close=" + str.tostring(mc, format.mintick))
+                // TRACE-END
                 state := 0
         else if state == 3
             if m5Index - breakoutAt > externalWindow
                 diagExternalExpired += diagStep
+                // TRACE-BEGIN
+                traceLog("EXTERNAL_WINDOW_EXPIRED", "additional_M5=" + str.tostring(m5Index - breakoutAt))
+                // TRACE-END
                 state := 0
             else
                 // Delayed confirmations must still close on the breakout side.
                 structureReady := direction == 1 ? mc > baseHigh : mc < baseLow
 
         if structureReady
+            // TRACE-BEGIN
+            traceLog("FILTER_CHECK", "session_and_dates=" + str.tostring(allowedSession) + " EMA=" + str.tostring(trendAllowed) + " DXY_enabled=" + str.tostring(useDxy) + " DXY_ok=" + str.tostring(dxyOk) + " Silver_enabled=" + str.tostring(useSilver) + " Silver_ok=" + str.tostring(silverOk) + " DXY_close/past=" + str.tostring(dc) + "/" + str.tostring(dp) + " Silver_close/past=" + str.tostring(sc) + "/" + str.tostring(sp) + " DXY_time=" + str.tostring(dtc) + " Silver_time=" + str.tostring(stc))
+            // TRACE-END
             diagSessionBlocked += not allowedSession ? diagStep : 0
             diagTrendBlocked += not trendAllowed ? diagStep : 0
             diagExternalBlocked += (not dxyOk or not silverOk) ? diagStep : 0
@@ -372,6 +446,9 @@ if m5Close
             cap = direction == 1 ? plannedStop + maxRisk : plannedStop - maxRisk
             // Round toward the permitted side of the risk cap.
             cap := direction == 1 ? math.floor(cap / syminfo.mintick) * syminfo.mintick : math.ceil(cap / syminfo.mintick) * syminfo.mintick
+            // TRACE-BEGIN
+            traceLog("ENTRY_RISK_CHECK", "signal_close=" + str.tostring(mc, format.mintick) + " structural_SL=" + str.tostring(plannedStop, format.mintick) + " risk_at_signal=" + str.tostring(direction == 1 ? mc - plannedStop : plannedStop - mc, format.mintick) + " max_risk=" + str.tostring(maxRisk, format.mintick) + " limit=" + str.tostring(cap, format.mintick) + " pullback_required=" + str.tostring(direction == 1 ? cap < mc : cap > mc) + " valid_side_of_stop=" + str.tostring(direction == 1 ? mc > plannedStop : mc < plannedStop))
+            // TRACE-END
             if direction == 1 ? mc > plannedStop : mc < plannedStop
                 diagSubmissions += diagStep
                 diagCappedPullback += (direction == 1 ? cap < mc : cap > mc) ? diagStep : 0
@@ -386,6 +463,9 @@ if m5Close
                 submittedClass := trendClass
                 submittedAt := m5Index
                 state := 4
+                // TRACE-BEGIN
+                traceLog("ORDER_CANDIDATE", "side=" + str.tostring(submittedDirection) + " cap=" + str.tostring(submittedLimit, format.mintick) + " SL=" + str.tostring(submittedStop, format.mintick) + " lifetime_M5=" + str.tostring(orderBars) + " EMA_class=" + str.tostring(submittedClass))
+                // TRACE-END
 
     // Without external filters there is no delayed-confirmation entry.
     if state == 3 and not useDxy and not useSilver
@@ -394,12 +474,18 @@ if m5Close
     // Only AFTER sweep evaluation: newly confirmed pivots cannot be swept on
     // their own confirmation candle. Keep only the two most recent per side.
     if not na(lph)
+        // TRACE-BEGIN
+        traceLog("LIQUIDITY_HIGH_CONFIRMED", "price=" + str.tostring(lph, format.mintick) + " pivot_UTC=" + str.format_time(lpt, "yyyy-MM-dd HH:mm", "Etc/UTC"), true)
+        // TRACE-END
         array.unshift(highs, lph)
         array.unshift(highIds, lpt)
         if array.size(highs) > 2
             array.pop(highs)
             array.pop(highIds)
     if not na(lpl)
+        // TRACE-BEGIN
+        traceLog("LIQUIDITY_LOW_CONFIRMED", "price=" + str.tostring(lpl, format.mintick) + " pivot_UTC=" + str.format_time(lpt, "yyyy-MM-dd HH:mm", "Etc/UTC"), true)
+        // TRACE-END
         array.unshift(lows, lpl)
         array.unshift(lowIds, lpt)
         if array.size(lows) > 2
@@ -432,7 +518,7 @@ plot(selectedEndpointTime, "Selected endpoint timestamp", display=display.data_w
 // This table reports setup events, NOT trades or profitability.
 var table diagnostics = table.new(position.bottom_right, 2, 19, border_width=1)
 if barstate.islast and showDiagnostics
-    labels = array.from("v0.2 STRUCTURE / state", "M5 bars in input date window", "First observed UTC", "Last observed UTC", "Confirmed impulses", "Qualifying sweeps", "Completed bases", "Structure breakouts", "Submitted candidates", "Observed fills (strategy only)", "Caps requiring pullback", "Anchor / sweep invalidations", "Breakout / external expiry", "Unfilled candidate expiry", "Session / date blocks", "EMA / external blocks", "Current impulse / trades", "Current stop / entry cap", "Variant")
+    labels = array.from("v0.2.1 LOGS / state", "M5 bars in input date window", "First observed UTC", "Last observed UTC", "Confirmed impulses", "Qualifying sweeps", "Completed bases", "Structure breakouts", "Submitted candidates", "Observed fills (strategy only)", "Caps requiring pullback", "Anchor / sweep invalidations", "Breakout / external expiry", "Unfilled candidate expiry", "Session / date blocks", "EMA / external blocks", "Current impulse / trades", "Current stop / entry cap", "Variant")
     values = array.from(str.tostring(state), str.tostring(diagBars), na(diagFirstTime) ? "none" : str.format_time(diagFirstTime, "yyyy-MM-dd HH:mm", "Etc/UTC"), na(diagLastTime) ? "none" : str.format_time(diagLastTime, "yyyy-MM-dd HH:mm", "Etc/UTC"), str.tostring(diagImpulses), str.tostring(diagSweeps), str.tostring(diagBases), str.tostring(diagBreakouts), str.tostring(diagSubmissions), str.tostring(diagFills), str.tostring(diagCappedPullback), str.tostring(diagAnchorInvalid) + " / " + str.tostring(diagSweepInvalid), str.tostring(diagBreakoutExpired) + " / " + str.tostring(diagExternalExpired), str.tostring(diagOrderExpired), str.tostring(diagSessionBlocked), str.tostring(diagTrendBlocked) + " / " + str.tostring(diagExternalBlocked), str.tostring(impulseId) + " / " + str.tostring(tradesInImpulse), str.tostring(submittedStop, format.mintick) + " / " + str.tostring(submittedLimit, format.mintick), "Close-BOS anchors only; BE provisional")
     for row = 0 to array.size(labels) - 1
         table.cell(diagnostics, 0, row, array.get(labels, row), text_color=color.white, bgcolor=color.new(color.black, 15), text_size=size.small)
@@ -442,17 +528,28 @@ if barstate.islast and showDiagnostics
 if pending and not executionFilled and state == 4
     invalidPending = (submittedDirection == 1 ? low < sweepExtreme or low < origin : high > sweepExtreme or high > origin) or time_close >= endDate
     if invalidPending
+        // TRACE-BEGIN
+        traceLog("ORDER_CANCEL_REQUEST", "reason=observed_sweep_or_anchor_breach_or_date_end cap=" + str.tostring(submittedLimit, format.mintick) + " chart_low=" + str.tostring(low, format.mintick) + " chart_high=" + str.tostring(high, format.mintick) + "; cannot undo an earlier intrabar fill")
+        // TRACE-END
         strategy.cancel("Long")
         strategy.cancel("Short")
         state := 0
         blockThroughM5 := time_close("5")
         pending := false
 if cancelEntry and not executionFilled
+    // TRACE-BEGIN
+    traceLog("ORDER_CANCEL_REQUEST", "reason=M5_setup_invalidated_or_order_expired cap=" + str.tostring(submittedLimit, format.mintick))
+    // TRACE-END
     strategy.cancel("Long")
     strategy.cancel("Short")
     pending := false
 
 if executionFilled
+    // TRACE-BEGIN
+    tracePositionImpulse := tracePendingImpulse
+    if strategy.position_size == 0
+        traceLog("ENTRY_AND_EXIT_SAME_BAR", "position_impulse=" + str.tostring(tracePositionImpulse) + "; see TRADE_CLOSED for actual entry/exit prices")
+    // TRACE-END
     pending := false
     tradeClass := submittedClass
     beActive := false
@@ -463,12 +560,22 @@ if executionFilled
         activeTarget := fillPrice + side * finalDistance
         activeTrigger := fillPrice + side * beDistance
         prevFillBar := strategy.opentrades.entry_bar_index(0)
+        // TRACE-BEGIN
+        traceLog("ENTRY_FILLED", "position_impulse=" + str.tostring(tracePositionImpulse) + " side=" + str.tostring(side) + " qty=" + str.tostring(math.abs(strategy.position_size)) + " fill=" + str.tostring(fillPrice, format.mintick) + " SL=" + str.tostring(activeStop, format.mintick) + " actual_stop_distance=" + str.tostring(side * (fillPrice - activeStop), format.mintick) + " BE_trigger=" + str.tostring(activeTrigger, format.mintick) + " final_TP=" + str.tostring(activeTarget, format.mintick) + " fill_UTC=" + str.format_time(strategy.opentrades.entry_time(0), "yyyy-MM-dd HH:mm:ss", "Etc/UTC"))
+        // TRACE-END
         if side * (fillPrice - activeStop) > maxRisk + syminfo.mintick or side * (fillPrice - activeStop) <= 0
             capBreaches += 1
+            // TRACE-BEGIN
+            traceLog("FILL_RISK_EXCEPTION", "Fill is beyond planned risk cap or on invalid side of stop; inspect gap/emulator sequence")
+            // TRACE-END
 
 if buySignal or sellSignal
     qty = lots * unitsPerLot / unitsPerTvQty
     finalTicks = math.max(1, int(math.round(finalDistance / syminfo.mintick)))
+    // TRACE-BEGIN
+    tracePendingImpulse := impulseId
+    traceLog("ORDER_SUBMITTED", "id=" + (buySignal ? "Long" : "Short") + " qty=" + str.tostring(qty) + " limit=" + str.tostring(signalLimit, format.mintick) + " stop=" + str.tostring(signalStop, format.mintick) + " profit_ticks=" + str.tostring(finalTicks) + "; submission is NOT a fill")
+    // TRACE-END
     pending := true
     if buySignal
         strategy.entry("Long", strategy.long, qty=qty, limit=signalLimit)
@@ -483,6 +590,15 @@ if strategy.position_size != 0
     reachedTrigger = side == 1 ? high >= activeTrigger : low <= activeTrigger
     returnedToEntry = side == 1 ? low <= strategy.position_avg_price : high >= strategy.position_avg_price
     if not beActive and reachedTrigger
+        // TRACE-BEGIN
+        traceLog("TP1_TOUCH_OBSERVED", "position_impulse=" + str.tostring(tracePositionImpulse) + " entry=" + str.tostring(strategy.position_avg_price, format.mintick) + " trigger=" + str.tostring(activeTrigger, format.mintick) + " entry_bar=" + str.tostring(bar_index == prevFillBar) + " also_returned_to_entry=" + str.tostring(returnedToEntry) + "; observed at execution-bar close, not an actual TP1 fill")
+        // TRACE-END
+        // TRACE-BEGIN
+        if bar_index == prevFillBar
+            traceLog("BE_SUPPRESSED_ENTRY_BAR", "Extrema might precede entry; no retroactive protection")
+        if returnedToEntry
+            traceLog("BE_SEQUENCE_UNCERTAIN", "TP1 and entry return occurred in this execution bar; ordering not established")
+        // TRACE-END
         // PROVISIONAL: observed execution-bar touch, NOT a TP1 order fill.
         // This update becomes executable AFTER this 30s/M5 bar closes.
         // Never retroactively grant a BE exit earlier within this bar.
@@ -490,6 +606,9 @@ if strategy.position_size != 0
             uncertainBars += 1
         // Fill-bar extrema may predate the entry. Do not use them to arm BE.
         if bar_index != prevFillBar
+            // TRACE-BEGIN
+            traceLog("BE_UPDATE_REQUEST", "position_impulse=" + str.tostring(tracePositionImpulse) + " new_SL=" + str.tostring(strategy.position_avg_price, format.mintick) + "; effective only for subsequent emulator execution; not retroactive")
+            // TRACE-END
             beActive := true
             activeStop := strategy.position_avg_price
     if side == 1
@@ -497,6 +616,11 @@ if strategy.position_size != 0
     else
         strategy.exit("Short bracket", "Short", stop=activeStop, limit=activeTarget)
 
+// TRACE-BEGIN
+if closedNow
+    for traceTradeIndex = priorClosed to strategy.closedtrades - 1
+        traceLog("TRADE_CLOSED", "position_impulse=" + str.tostring(tracePositionImpulse) + " trade_index=" + str.tostring(traceTradeIndex) + " entry_id=" + strategy.closedtrades.entry_id(traceTradeIndex) + " exit_id=" + strategy.closedtrades.exit_id(traceTradeIndex) + " qty=" + str.tostring(strategy.closedtrades.size(traceTradeIndex)) + " entry=" + str.tostring(strategy.closedtrades.entry_price(traceTradeIndex), format.mintick) + " exit=" + str.tostring(strategy.closedtrades.exit_price(traceTradeIndex), format.mintick) + " reported_profit=" + str.tostring(strategy.closedtrades.profit(traceTradeIndex)) + " commission=" + str.tostring(strategy.closedtrades.commission(traceTradeIndex)) + " entry_UTC=" + str.format_time(strategy.closedtrades.entry_time(traceTradeIndex), "yyyy-MM-dd HH:mm:ss", "Etc/UTC") + " exit_UTC=" + str.format_time(strategy.closedtrades.exit_time(traceTradeIndex), "yyyy-MM-dd HH:mm:ss", "Etc/UTC"))
+// TRACE-END
 if closedNow and strategy.position_size == 0
     activeStop := na
     activeTarget := na
@@ -513,3 +637,13 @@ plot(capBreaches, "Observed fill risk-cap exceptions", display=display.data_wind
 var table warning = table.new(position.top_right, 1, 1)
 if barstate.islast and marginNote
     table.cell(warning, 0, 0, "PROVISIONAL — NOT VALIDATED\nM5 signals; BE at execution-bar close\nUse 30S chart for finer approximation\nSet broker margin & quantity in Properties\nBE warnings: " + str.tostring(uncertainBars), text_color=color.white, bgcolor=color.new(color.red, 25))
+
+// TRACE-BEGIN
+if enableTrace and (barstate.islastconfirmedhistory or (barstate.islast and barstate.isconfirmed))
+    log.info("TRACE_SUMMARY v0.2.1 | symbol={0} chart={1} fib={2} | full INPUT-window counters, NOT log-window-only: bars={3} impulses={4} sweeps={5} bases={6} breakouts={7} candidates={8} fills={9} unfilled_expiry={10} pullback_caps={11} | broker_open={12} broker_closed={13} | BE remains provisional", syminfo.tickerid, timeframe.period, fibTf, str.tostring(diagBars), str.tostring(diagImpulses), str.tostring(diagSweeps), str.tostring(diagBases), str.tostring(diagBreakouts), str.tostring(diagSubmissions), str.tostring(diagFills), str.tostring(diagOrderExpired), str.tostring(diagCappedPullback), str.tostring(strategy.opentrades), str.tostring(strategy.closedtrades))
+// TRACE-END
+
+// TRACE-BEGIN
+if enableTrace and (barstate.islastconfirmedhistory or (barstate.islast and barstate.isconfirmed))
+    log.info("TRACE_SETTINGS | capital={0} EUR tick={1} pointvalue={2} | lots={3} units_per_lot={4} units_per_TV_qty={5} | Fib_pivots={6}/{7} liquidity_pivots={8}/{9} | BE_trigger={10} full_target={11} | log_window_UTC={12}..{13} | Verify commission, margin and slippage in Strategy Properties", str.tostring(strategy.initial_capital), str.tostring(syminfo.mintick), str.tostring(syminfo.pointvalue), str.tostring(lots), str.tostring(unitsPerLot), str.tostring(unitsPerTvQty), str.tostring(fibLeft), str.tostring(fibRight), str.tostring(liqLeft), str.tostring(liqRight), str.tostring(beDistance), str.tostring(finalDistance), str.format_time(traceStart, "yyyy-MM-dd HH:mm", "Etc/UTC"), str.format_time(traceEnd, "yyyy-MM-dd HH:mm", "Etc/UTC"))
+// TRACE-END

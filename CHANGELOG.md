@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.1 — 2026-10-22 — execution logs without CSV export
+
+Added opt-in/configurable Pine Logs (enabled by default) to the v0.2 strategy and shared setup logs to its indicator. Events cover anchor activation/invalidation, qualifying sweeps, bases, breakouts, filters, planned risk/caps, submissions, observed fills, cancellation/expiry, provisional BE and closed trades. Detailed M5 mode includes bar/zone/pivot rejection data; independent log dates allow narrow traces without altering trade history. Added full-window summary/settings messages and stable execution impulse identity in logged trade details. v0.1 remains unchanged.
+
+Validation: source isolation confirms logging/display-only changes, identical shared setup source, and unchanged inherited trading statements and execution wrapper. All 30 local tests pass (27 existing plus three logging tests through the constrained evaluator). No TradingView compilation, log-panel run, actual log output or new backtest is claimed. See docs/PINE_LOGS.md for use and limitations.
+
 ## Post-v0.2 audit — 2026-10-22 — no Pine logic changes
 
 User supplied a one-closed-trade v0.2 screenshot and reported worsening frequency. Added a test-only evaluator of actual M5 Pine control-flow statements and 15 synthetic pipeline regressions, bringing local tests to 27. Reproduced the base-confirmation/risk-cap/one-bar-expiry interaction; no stuck-state fault was found in covered cases. No TradingView fills, request.security behavior or historical profitability were validated by these tests. Preserved all Pine files and documented the exact same-run data needed for a bar-by-bar audit in docs/LOW_FREQUENCY_AUDIT.md. No fix or performance improvement is claimed.

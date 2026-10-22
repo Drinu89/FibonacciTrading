@@ -52,3 +52,9 @@ Read [the exact variant rules](docs/V0_2_STRUCTURE_VARIANT.md). Compare on the S
 ## Current audit status
 
 After the user reported one v0.2 closed trade, [a low-frequency audit](docs/LOW_FREQUENCY_AUDIT.md) added actual-source M5 pipeline tests. All 27 local tests pass; they are not TradingView execution tests. No Pine logic was changed. A confirmed breakout can require more than the allowed stop distance, leaving a capped pullback order that expires unfilled. Exact historical diagnosis now requires the same-run chart/trade exports and settings; another unverified rule variant is not a demonstrated fix.
+
+## Pine Logs — no CSV export needed (v0.2.1)
+
+The v0.2 strategy now includes **Execution logs → Enable Pine Logs** (ON by default). Open Pine Logs from Pine Editor and select this strategy. Start with **Events**; for a missed entry choose **Detailed M5** and a narrow log start/end window. Copy `TRACE_SUMMARY`, `TRACE_SETTINGS` and the relevant messages here, or share screenshots. Log windows do not change trade windows. [Full instructions and event meanings](docs/PINE_LOGS.md).
+
+This is instrumentation only: trading rules, costs and provisional BE behavior remain unchanged. All 30 local tests pass; TradingView compilation and log UI validation remain pending.

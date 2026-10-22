@@ -7,9 +7,10 @@ from pathlib import Path
 import re
 import unittest
 from pine_subset import Expression, execute, functions, statements
+from tools.pine_source import without_trace
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = (ROOT/'Fibonacci_v0.2_Strategy.pine').read_text()
+SOURCE = without_trace((ROOT/'Fibonacci_v0.2_Strategy.pine').read_text())
 BODY = SOURCE.split('if m5Close\n', 1)[1].split('\nz1 =', 1)[0]
 PROGRAM = statements(BODY)
 FEEDBACK = statements(SOURCE.split('// Feedback belongs', 1)[1].split('\nif m5Close', 1)[0].split('\n', 1)[1])
