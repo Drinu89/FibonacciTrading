@@ -48,3 +48,7 @@ These are diagnostic possibilities, not established causes or recommendations to
 The frozen v0.1 files remain unchanged. Use [Fibonacci_v0.2_Strategy.pine](Fibonacci_v0.2_Strategy.pine) and [Fibonacci_v0.2_Indicator.pine](Fibonacci_v0.2_Indicator.pine) as separate TradingView scripts. They require a confirmed source-timeframe close beyond prior swing structure before a subsequently confirmed endpoint can create a new Fibonacci. All entry, risk and exit rules remain inherited.
 
 Read [the exact variant rules](docs/V0_2_STRUCTURE_VARIANT.md). Compare on the SAME M5 chart, dates, costs and settings. Local anchor-engine tests and source-isolation checks pass; TradingView compilation and backtests remain pending. No increase in trade frequency or profit is claimed. Immediate BE remains provisional.
+
+## Current audit status
+
+After the user reported one v0.2 closed trade, [a low-frequency audit](docs/LOW_FREQUENCY_AUDIT.md) added actual-source M5 pipeline tests. All 27 local tests pass; they are not TradingView execution tests. No Pine logic was changed. A confirmed breakout can require more than the allowed stop distance, leaving a capped pullback order that expires unfilled. Exact historical diagnosis now requires the same-run chart/trade exports and settings; another unverified rule variant is not a demonstrated fix.

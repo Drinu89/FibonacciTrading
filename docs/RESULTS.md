@@ -24,3 +24,9 @@ Immediate-BE behavior is still provisional. The diagnostic changes do not fix or
 The user confirmed M5 execution and supplied a table showing 5,172 observed M5 bars (2026-09-27 22:00 UTC–2026-10-22 15:00 UTC), 934 confirmed impulses, 21 qualifying sweeps, 13 completed bases, 6 breakouts, 6 submitted candidates, 2 observed fills, 5 caps requiring a pullback, 202/12 anchor/sweep invalidations, 3/0 breakout/external expirations, 4 unfilled expirations and zero session/date/EMA/external blocks. Inputs/Properties and trade export remain incomplete.
 
 A subsequent chart showed stepped automatic zones alongside a larger manually drawn bearish Fibonacci. Source inspection confirmed v0.1 permits minor pivot pairs to replace anchors before a sweep. That motivates the separately approved v0.2 anchor experiment; it does not prove the exact reason the discretionary example was missed. No v0.2 TradingView results have been supplied.
+
+## User-supplied v0.2 performance screenshot
+
+Displayed September 28–October 22, 2026, EUR 300 capital, net P&L −EUR 0.75 (−0.25%), maximum drawdown EUR 2.25 (0.75%), profitable trades 0/1, profit factor 0, and one Long closed trade in the breakdown. The user reports worse trade frequency. No v0.2 pipeline table, raw bars, exact input/property record or trade export is available. The agent did not run this backtest. The screenshot alone does not establish the reason for the loss or omitted trades.
+
+An additional source/pipeline audit is recorded in LOW_FREQUENCY_AUDIT.md. No trading rules were modified during that audit.

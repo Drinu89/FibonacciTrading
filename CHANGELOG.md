@@ -1,5 +1,9 @@
 # Changelog
 
+## Post-v0.2 audit — 2026-10-22 — no Pine logic changes
+
+User supplied a one-closed-trade v0.2 screenshot and reported worsening frequency. Added a test-only evaluator of actual M5 Pine control-flow statements and 15 synthetic pipeline regressions, bringing local tests to 27. Reproduced the base-confirmation/risk-cap/one-bar-expiry interaction; no stuck-state fault was found in covered cases. No TradingView fills, request.security behavior or historical profitability were validated by these tests. Preserved all Pine files and documented the exact same-run data needed for a bar-by-bar audit in docs/LOW_FREQUENCY_AUDIT.md. No fix or performance improvement is claimed.
+
 ## 0.2.0 — 2026-10-22 — separate structure-anchor experiment
 
 Added Fibonacci_v0.2_Strategy.pine and Fibonacci_v0.2_Indicator.pine after user approval. New anchor candidates require a source-timeframe close beyond previously confirmed structure and a subsequently confirmed extreme pivot. Developing origins stay fixed; minor unbroken pivot pairs no longer create candidates. Added confirmed endpoint and source-structure Data Window fields. Preserved v0.1 Pine files and all inherited setup, order, risk and provisional BE rules.
