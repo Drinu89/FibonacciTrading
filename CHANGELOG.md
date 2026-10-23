@@ -1,5 +1,9 @@
 # Changelog
 
+## Supplied 1-bar versus 3-bar expiry logs — 2026-10-23 — no Pine changes
+
+Matched all ten submitted candidate timestamps/directions/caps/stops across the two uploaded runs. Three-bar expiry increased fills 1→4; all three additional fills hit structural stops. Reconstructed reported closed P&L is −EUR 0.7481 versus −EUR 19.0953, inclusive of reported commission. Recorded differing overall history, duplicate summary snapshots and entry-bar BE uncertainty in docs/ORDER_EXPIRY_COMPARISON.md. No performance improvement, execution validation or baseline/default change is claimed.
+
 ## Uploaded log analysis — 2026-10-22 — no Pine changes
 
 Analyzed the user-supplied v0.2.1 Pine Logs CSV (1,078 rows). Confirmed ten submissions, nine capped limits never reached during their next M5 bar, and one near-entry exit with commission/slippage. Identified the three-candle breakout/sweep-stop/$6-cap/one-bar-expiry interaction as the supported fill bottleneck. Recorded source context, all order prices, base outcomes, BE sequencing limits and the pending single-factor experiment decision in docs/UPLOADED_LOG_DIAGNOSIS.md. No trading-rule change or improved performance is claimed.
